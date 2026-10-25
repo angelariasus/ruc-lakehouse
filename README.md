@@ -9,7 +9,7 @@ previous one and stores the changes as Iceberg tables with full history
 (SCD type 2): new taxpayers, deregistrations, and changes of status, address
 condition or location.
 
-> **Status:** phase 3 of 7, silver history. See [Roadmap](#roadmap).
+> **Status:** phase 4 of 7, gold models. See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -22,6 +22,7 @@ managed services, so moving to the cloud is a configuration change:
 | Lakekeeper | Iceberg REST catalog | AWS Glue Data Catalog (Iceberg REST endpoint) |
 | PySpark 4.1 + Iceberg 1.12 | Ingestion and history (bronze, silver) | EMR Serverless |
 | Trino | SQL engine | Amazon Athena |
+| dbt (dbt-trino) | Gold models and data tests | dbt-athena |
 | Postgres | Catalog and orchestrator metadata only | Amazon RDS |
 
 The active target is chosen with `LAKE_PROFILE` (`local` or `aws`); see
@@ -61,6 +62,35 @@ silver load takes another minute and a half. Only one line is rejected
 `\\` for a backslash), as in `EBEN EZER \| INGENIERIA Y ARQUITECTURA S.A.C.`;
 a naive split on `|` would lose those taxpayers.
 
+## Gold models
+
+dbt builds the reporting layer on Trino (`gold` schema), with
+[INEI's 2022 list of 1,891 districts](https://www.datosabiertos.gob.pe/dataset/ubigeos-c%C3%B3digos-de-ubicaci%C3%B3n-geogr%C3%A1fica-instituto-nacional-de-estad%C3%ADstica-e-inform%C3%A1tica-inei)
+as a seed:
+
+| Model | Grain |
+|---|---|
+| `dim_taxpayer` | One row per RUC in its current state, with taxpayer type (natural person or legal entity, from the RUC prefix), status group and district |
+| `dim_ubigeo` | One row per district |
+| `fct_taxpayer_events` | One row per change: registered, removed, or a change of status, address condition, location, name or address, with the value before and after |
+| `agg_registry_daily` | Registry size on every snapshot date by type, status, address condition and department |
+| `agg_daily_events` | Events per day by type and department |
+| `agg_status_transitions` | Daily moves between statuses, e.g. `ACTIVO` to `BAJA DE OFICIO` |
+
+`agg_registry_daily` does not re-read the whole history for every date: each
+version adds one to its group on `valid_from` and subtracts one on `valid_to`,
+and a running sum gives the size on each date.
+
+Tests cover keys, accepted values, the link to the district list and three
+custom checks: one current version per RUC, the daily registry adding up to
+the current versions, and no names of natural persons in gold, which only
+names legal entities. The district check is a warning: 78 taxpayers carry
+codes of districts reorganized after 2016, mostly in Loreto.
+
+On the real snapshot, `dbt build` takes about 40 seconds. Of the 2.37 million
+legal entities in the registry, 1.38 million are deregistered and 890,000 are
+active, half of them in Lima.
+
 ## Quick start
 
 Requirements: Docker with about 6 GB of free memory.
@@ -80,11 +110,12 @@ uv run python tests/fixtures/make_snapshot.py data/snapshots 2026-01-15
 docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-01-15
 docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-01-15
 docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver 2026-01-15
-docker compose exec trino trino --execute "select count(*) from lakehouse.silver.taxpayers_history"
+docker compose run --rm jobs dbt build
+docker compose exec trino trino --execute "select * from lakehouse.gold.agg_registry_daily"
 ```
 
 For a second day with known changes (30 removed, 30 renamed, 20 new), generate
-`2026-01-16 3000 1` and run the same three jobs for that date.
+`2026-01-16 3000 1`, run the same three jobs for that date and `dbt build`.
 
 | Service | URL |
 |---|---|
@@ -100,14 +131,19 @@ uv sync
 uv run pre-commit install
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
+uv run sqlfluff lint dbt/models dbt/tests
+uv run dbt parse --project-dir dbt --profiles-dir dbt
 ```
+
+The district seed is rebuilt from INEI's file with
+`uv run python -m ruc_lakehouse.reference.ubigeo dbt/seeds/ubigeo.csv`.
 
 ## Roadmap
 
 - [x] Phase 1: local stack (storage, catalog, Spark, Trino) and CI
 - [x] Phase 2: bronze, snapshots loaded as Iceberg tables with a schema contract
 - [x] Phase 3: silver, daily diff and SCD type 2 history
-- [ ] Phase 4: gold, dbt models on Trino with data tests
+- [x] Phase 4: gold, dbt models on Trino with data tests
 - [ ] Phase 5: orchestration with Dagster (daily partitions, backfills)
 - [ ] Phase 6: AWS infrastructure as code with Terraform
 - [ ] Phase 7: table maintenance, observability and documentation
@@ -115,7 +151,8 @@ uv run ruff check . && uv run ruff format --check .
 ## Data source
 
 [SUNAT, padrón reducido RUC](https://www.sunat.gob.pe/descargaPRR/mrc137_padron_reducido.html),
-public data published by Peru's tax administration.
+public data published by Peru's tax administration. District names:
+INEI, *Ubigeos 2022* (ODbL).
 
 ## License
 
