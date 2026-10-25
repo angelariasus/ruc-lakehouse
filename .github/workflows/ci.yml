@@ -26,16 +26,28 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest
 
-  # Starts the whole local lakehouse and checks that a table written by Spark
-  # is readable from Trino through the shared catalog.
+  # Starts the whole local lakehouse, loads a synthetic snapshot end to end and
+  # checks the result from Trino through the shared catalog.
   stack:
     runs-on: ubuntu-latest
+    env:
+      SNAPSHOT_DATE: "2026-01-15"
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
       - run: cp .env.example .env
+      - run: uv run --locked python tests/fixtures/make_snapshot.py data/snapshots "$SNAPSHOT_DATE"
       - run: docker compose up -d --build --wait
       - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
-      - run: docker compose exec -T trino trino --execute "select count(*) from lakehouse.smoke.ping"
+      - run: docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing "$SNAPSHOT_DATE"
+      - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze "$SNAPSHOT_DATE"
+      - name: Check bronze from Trino
+        run: |
+          query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
+          loaded=$(query "select count(*) from lakehouse.bronze.padron_ruc where snapshot_date = date '$SNAPSHOT_DATE'")
+          rejected=$(query "select count(*) from lakehouse.bronze.padron_ruc_rejects where snapshot_date = date '$SNAPSHOT_DATE'")
+          echo "loaded=$loaded rejected=$rejected"
+          test "$loaded" = "3000" && test "$rejected" = "2"
       - if: failure()
         run: docker compose logs
       - if: always()
