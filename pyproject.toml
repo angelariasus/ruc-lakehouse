@@ -5,12 +5,14 @@ description = "Cloud-ready lakehouse that turns SUNAT's daily taxpayer registry 
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "boto3>=1.40",
     # Iceberg ships a Spark runtime per Spark minor version: keep both in step.
     "pyspark>=4.1,<4.2",
 ]
 
 [dependency-groups]
 dev = [
+    "moto[s3]>=5.2",
     "pre-commit>=4.0",
     "pytest>=9.0",
     "ruff>=0.17",
