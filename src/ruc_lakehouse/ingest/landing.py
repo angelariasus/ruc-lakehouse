@@ -34,6 +34,7 @@ from typing import Any
 
 from ruc_lakehouse import contracts
 from ruc_lakehouse.config import Settings
+from ruc_lakehouse.reporting import materialization_reporter
 from ruc_lakehouse.storage import MARKER, SOURCE_FILE, landing_key, s3_client, staging_prefix
 
 LINES_PER_PART = 1_000_000
@@ -148,7 +149,9 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("SNAPSHOTS_DIR", "/snapshots")),
     )
     args = parser.parse_args(argv)
-    land(Settings.from_env(), args.snapshots_dir, args.snapshot_date)
+    with materialization_reporter() as report:
+        marker = land(Settings.from_env(), args.snapshots_dir, args.snapshot_date)
+        report({"lines": marker["lines"], "parts": marker["parts"], "sha256": marker["sha256"]})
     return 0
 
 

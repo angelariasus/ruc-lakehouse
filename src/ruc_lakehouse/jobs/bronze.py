@@ -25,6 +25,7 @@ from ruc_lakehouse import contracts
 from ruc_lakehouse.config import Settings
 from ruc_lakehouse.ingest.landing import read_marker
 from ruc_lakehouse.ops import ensure_runs_table, record_run
+from ruc_lakehouse.reporting import materialization_reporter
 from ruc_lakehouse.spark import CATALOG, build_session
 from ruc_lakehouse.storage import MARKER, s3_client, spark_uri, staging_prefix
 
@@ -173,11 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("snapshot_date", type=date.fromisoformat)
     args = parser.parse_args(argv)
     settings = Settings.from_env()
-    spark = build_session(f"bronze-{args.snapshot_date}", settings)
-    try:
-        load(spark, settings, args.snapshot_date)
-    finally:
-        spark.stop()
+    with materialization_reporter() as report:
+        spark = build_session(f"bronze-{args.snapshot_date}", settings)
+        try:
+            report(load(spark, settings, args.snapshot_date))
+        finally:
+            spark.stop()
     return 0
 
 

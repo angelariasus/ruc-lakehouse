@@ -6,8 +6,16 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "boto3>=1.40",
+    "dagster>=1.13,<1.14",
+    "dagster-dbt>=0.29,<0.30",
+    "dagster-pipes>=1.13,<1.14",
+    "dagster-postgres>=0.29,<0.30",
+    "dagster-webserver>=1.13,<1.14",
     "dbt-core>=1.12,<1.13",
     "dbt-trino>=1.10",
+    # Driver for dagster-postgres, which does not install one itself. Dagster's
+    # queries expect psycopg2 (client-side parameters), not psycopg 3.
+    "psycopg2-binary>=2.9",
     # Iceberg ships a Spark runtime per Spark minor version: keep both in step.
     "pyspark>=4.1,<4.2",
 ]

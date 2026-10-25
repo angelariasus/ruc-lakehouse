@@ -33,6 +33,7 @@ from ruc_lakehouse import contracts
 from ruc_lakehouse.config import Settings
 from ruc_lakehouse.jobs.bronze import BRONZE
 from ruc_lakehouse.ops import ensure_runs_table, last_succeeded, record_run
+from ruc_lakehouse.reporting import materialization_reporter
 from ruc_lakehouse.spark import CATALOG, build_session
 
 if TYPE_CHECKING:
@@ -224,11 +225,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("snapshot_date", type=date.fromisoformat)
     args = parser.parse_args(argv)
     settings = Settings.from_env()
-    spark = build_session(f"silver-{args.snapshot_date}", settings)
-    try:
-        apply(spark, args.snapshot_date)
-    finally:
-        spark.stop()
+    with materialization_reporter() as report:
+        spark = build_session(f"silver-{args.snapshot_date}", settings)
+        try:
+            metrics = apply(spark, args.snapshot_date)
+            report(metrics or {"status": "already applied"})
+        finally:
+            spark.stop()
     return 0
 
 
