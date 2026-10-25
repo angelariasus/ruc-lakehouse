@@ -6,7 +6,7 @@
   and sorted by RUC. Values are kept as published, except that SUNAT's ``-``
   becomes null.
 - ``bronze.padron_ruc_rejects``: lines that break the contract, with the reason.
-- ``ops.ingestion_runs``: one row per run with lines read, loaded and rejected.
+- ``ops.job_runs``: one row per run with lines read, loaded and rejected.
 
 Before writing, the job reconciles its counts with the landing marker and
 checks the reject ratio, so a broken file never reaches the table. Running it
@@ -18,13 +18,13 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import uuid
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 from ruc_lakehouse import contracts
 from ruc_lakehouse.config import Settings
 from ruc_lakehouse.ingest.landing import read_marker
+from ruc_lakehouse.ops import ensure_runs_table, record_run
 from ruc_lakehouse.spark import CATALOG, build_session
 from ruc_lakehouse.storage import MARKER, s3_client, spark_uri, staging_prefix
 
@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
 BRONZE = f"{CATALOG}.bronze.padron_ruc"
 REJECTS = f"{CATALOG}.bronze.padron_ruc_rejects"
-RUNS = f"{CATALOG}.ops.ingestion_runs"
 
 TABLE_PROPERTIES = (
     "tblproperties ('format-version' = '2', 'write.parquet.compression-codec' = 'zstd')"
@@ -87,8 +86,8 @@ def parse(lines: DataFrame) -> DataFrame:
 
 def ensure_tables(spark: SparkSession) -> None:
     columns = ", ".join(f"{name} string" for name in contracts.COLUMNS)
-    for namespace in ("bronze", "ops"):
-        spark.sql(f"create namespace if not exists {CATALOG}.{namespace}")
+    spark.sql(f"create namespace if not exists {CATALOG}.bronze")
+    ensure_runs_table(spark)
 
     if not spark.catalog.tableExists(BRONZE):
         spark.sql(
@@ -104,12 +103,6 @@ def ensure_tables(spark: SparkSession) -> None:
         f"raw_line string, source_file string, ingested_at timestamp) using iceberg "
         f"partitioned by (snapshot_date) {TABLE_PROPERTIES}"
     )
-    spark.sql(
-        f"create table if not exists {RUNS} (run_id string, job string, snapshot_date date, "
-        f"source_sha256 string, lines_read bigint, rows_loaded bigint, rows_rejected bigint, "
-        f"status string, message string, started_at timestamp, finished_at timestamp) "
-        f"using iceberg {TABLE_PROPERTIES}"
-    )
 
 
 def check_counts(expected_lines: int, loaded: int, rejected: int) -> None:
@@ -120,14 +113,6 @@ def check_counts(expected_lines: int, loaded: int, rejected: int) -> None:
         raise ContractViolation(
             f"{rejected:,} of {read:,} lines rejected, above {contracts.MAX_REJECT_RATIO:.1%}"
         )
-
-
-def record_run(spark: SparkSession, **values: object) -> None:
-    values = {"run_id": str(uuid.uuid4()), "job": "bronze", **values}
-    schema = spark.table(RUNS).schema
-    # createDataFrame matches tuples by position, so follow the table's order.
-    row = tuple(values[field.name] for field in schema.fields)
-    spark.createDataFrame([row], schema=schema).writeTo(RUNS).append()
 
 
 def load(spark: SparkSession, settings: Settings, snapshot_date: date) -> dict[str, int]:
@@ -158,11 +143,10 @@ def load(spark: SparkSession, settings: Settings, snapshot_date: date) -> dict[s
     loaded = totals["valid"] if totals else 0
     rejected = (totals["lines"] if totals else 0) - loaded
     run = {
+        "job": "bronze",
         "snapshot_date": snapshot_date,
-        "source_sha256": marker["sha256"],
-        "lines_read": loaded + rejected,
-        "rows_loaded": loaded,
-        "rows_rejected": rejected,
+        "input": f"sha256:{marker['sha256']}",
+        "metrics": {"lines_read": loaded + rejected, "loaded": loaded, "rejected": rejected},
         "started_at": started,
     }
     try:
@@ -179,7 +163,7 @@ def load(spark: SparkSession, settings: Settings, snapshot_date: date) -> dict[s
         "snapshot_date", "reject_reason", "raw_line", "source_file", "ingested_at"
     ).writeTo(REJECTS).overwritePartitions()
 
-    record_run(spark, **run, status="succeeded", message=None, finished_at=datetime.now(UTC))
+    record_run(spark, **run, status="succeeded", finished_at=datetime.now(UTC))
     print(f"{snapshot_date}: {loaded:,} rows loaded, {rejected:,} rejected")
     return {"loaded": loaded, "rejected": rejected}
 
