@@ -122,14 +122,20 @@ services:
       timeout: 5s
       retries: 20
 
-  # PySpark jobs, run on demand:
-  #   docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
+  # Jobs, run on demand:
+  #   docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-10-25
+  #   docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-10-25
   jobs:
     image: ruc-lakehouse:dev
     build:
       context: .
       dockerfile: docker/app/Dockerfile
-    environment: *lake-env
+    environment:
+      <<: *lake-env
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-6g}
+    volumes:
+      # Snapshots written by the daily collector, read-only.
+      - ${SNAPSHOTS_HOST_DIR:-./data/snapshots}:/snapshots:ro
     depends_on:
       catalog-init:
         condition: service_completed_successfully
