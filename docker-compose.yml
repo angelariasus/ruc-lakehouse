@@ -1,0 +1,142 @@
+# Local lakehouse. Each service stands in for an AWS one:
+#   storage  -> Amazon S3          catalog -> AWS Glue Data Catalog (Iceberg REST)
+#   trino    -> Amazon Athena      jobs    -> EMR Serverless (PySpark)
+
+x-lake-env: &lake-env
+  LAKE_PROFILE: ${LAKE_PROFILE}
+  LAKE_BUCKET: ${LAKE_BUCKET}
+  AWS_REGION: ${AWS_REGION}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  CATALOG_URI: ${CATALOG_URI}
+  CATALOG_WAREHOUSE: ${CATALOG_WAREHOUSE}
+
+x-catalog-env: &catalog-env
+  LAKEKEEPER__PG_ENCRYPTION_KEY: ${CATALOG_ENCRYPTION_KEY}
+  LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lakekeeper
+  LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lakekeeper
+  RUST_LOG: info
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible object storage. Silo is a maintained fork of MinIO, whose
+  # community edition no longer ships images.
+  storage:
+    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - lake-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  storage-init:
+    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set lake http://storage:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"
+        && mc mb --ignore-existing "lake/$$LAKE_BUCKET"
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      LAKE_BUCKET: ${LAKE_BUCKET}
+    restart: "no"
+
+  catalog-migrate:
+    image: quay.io/lakekeeper/catalog:v0.14.2
+    command: ["migrate"]
+    environment: *catalog-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Iceberg REST catalog.
+  catalog:
+    image: quay.io/lakekeeper/catalog:v0.14.2
+    command: ["serve"]
+    environment: *catalog-env
+    depends_on:
+      catalog-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8181:8181"
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  catalog-init:
+    image: ruc-lakehouse:dev
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    command: ["python", "-m", "ruc_lakehouse.setup.catalog"]
+    environment: *lake-env
+    depends_on:
+      catalog:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  trino:
+    image: trinodb/trino:484
+    environment: *lake-env
+    volumes:
+      - ./docker/trino/catalog/lakehouse.properties:/etc/trino/catalog/lakehouse.properties:ro
+    depends_on:
+      catalog-init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/v1/info"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # PySpark jobs, run on demand:
+  #   docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
+  jobs:
+    image: ruc-lakehouse:dev
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    environment: *lake-env
+    depends_on:
+      catalog-init:
+        condition: service_completed_successfully
+    ports:
+      - "4040:4040"
+    profiles: ["jobs"]
+
+volumes:
+  postgres-data:
+  lake-data:
