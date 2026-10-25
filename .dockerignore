@@ -1,0 +1,11 @@
+# Keep the build context small: the image copies only what it needs.
+.git
+.venv
+data
+**/__pycache__
+.pytest_cache
+.ruff_cache
+dbt/target
+dbt/logs
+dbt/dbt_packages
+.env
