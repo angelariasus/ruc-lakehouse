@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "boto3>=1.40",
+    "dbt-core>=1.12,<1.13",
+    "dbt-trino>=1.10",
     # Iceberg ships a Spark runtime per Spark minor version: keep both in step.
     "pyspark>=4.1,<4.2",
 ]
@@ -16,6 +18,7 @@ dev = [
     "pre-commit>=4.0",
     "pytest>=9.0",
     "ruff>=0.17",
+    "sqlfluff>=4.0",
 ]
 
 [build-system]

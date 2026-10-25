@@ -37,6 +37,13 @@ RUN jars=$(python -c "import pyspark, pathlib; print(pathlib.Path(pyspark.__file
 
 COPY src ./src
 RUN uv sync --locked --no-dev
+COPY dbt ./dbt
+
+# dbt writes its artifacts outside the read-only project folder.
+ENV DBT_PROJECT_DIR=/app/dbt \
+    DBT_PROFILES_DIR=/app/dbt \
+    DBT_TARGET_PATH=/tmp/dbt/target \
+    DBT_LOG_PATH=/tmp/dbt/logs
 
 RUN useradd --create-home --uid 1000 lake
 USER lake

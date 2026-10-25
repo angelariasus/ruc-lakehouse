@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: silver
+    database: lakehouse
+    schema: silver
+    tables:
+      - name: taxpayers_history
+        description: One row per version of each RUC (SCD type 2), written by the silver job.
+
+  - name: ops
+    database: lakehouse
+    schema: ops
+    tables:
+      - name: job_runs
+        description: One row per job run; silver's successful runs list the applied snapshot dates.

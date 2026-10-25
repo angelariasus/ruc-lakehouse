@@ -9,6 +9,12 @@ __pycache__/
 # Environment
 .env
 
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
 # Spark
 spark-warehouse/
 metastore_db/

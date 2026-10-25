@@ -1,0 +1,74 @@
+version: 2
+
+models:
+  - name: dim_ubigeo
+    description: Peru's districts with department, province and natural region (INEI 2022).
+    columns:
+      - name: ubigeo
+        description: INEI district code, the same SUNAT uses.
+        data_tests: [unique, not_null]
+
+  - name: dim_taxpayer
+    description: >
+      Current state of every RUC in the registry. Only legal entities keep
+      their name.
+    columns:
+      - name: ruc
+        data_tests: [unique, not_null]
+      - name: taxpayer_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [legal_entity, natural_person, other]
+      - name: status_group
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [active, suspended, deregistered, other]
+      - name: ubigeo
+        description: >
+          A few codes of districts reorganized after 2016 (mostly in Loreto)
+          are not in INEI's 2022 list, hence a warning, not an error.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_ubigeo')
+                field: ubigeo
+              config:
+                severity: warn
+      - name: first_seen_on
+        description: First snapshot that contains the RUC (the history starts with the first collected snapshot).
+        data_tests: [not_null]
+
+  - name: fct_taxpayer_events
+    description: One row per change seen in the registry, dated with the snapshot that showed it.
+    columns:
+      - name: snapshot_date
+        data_tests: [not_null]
+      - name: ruc
+        data_tests: [not_null]
+      - name: event_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - registered
+                  - removed
+                  - status_changed
+                  - address_condition_changed
+                  - location_changed
+                  - name_changed
+                  - address_changed
+
+  - name: agg_registry_daily
+    description: Registry size on every applied snapshot date by type, status, address condition and department.
+    columns:
+      - name: taxpayers
+        data_tests: [not_null]
+
+  - name: agg_daily_events
+    description: Events per day by event type, taxpayer type and department.
+
+  - name: agg_status_transitions
+    description: Status transitions per day (from status, to status).

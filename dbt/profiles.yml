@@ -1,0 +1,17 @@
+# Local target: Trino in the Docker stack. On AWS the same models run on
+# Athena (engine v3 is Trino-based) through dbt-athena.
+ruc_lakehouse:
+  target: local
+  outputs:
+    local:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('TRINO_PORT', '8080') | int }}"
+      http_scheme: http
+      # Plain HTTP inside the Docker network; on a real cluster use https.
+      require_certificate_validation: true
+      database: lakehouse
+      schema: gold
+      threads: 4

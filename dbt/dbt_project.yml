@@ -1,0 +1,32 @@
+name: ruc_lakehouse
+version: "1.0.0"
+profile: ruc_lakehouse
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  ruc_lakehouse:
+    # CREATE OR REPLACE keeps the Iceberg table (and its history) instead of
+    # dropping and renaming it.
+    +on_table_exists: replace
+    staging:
+      +materialized: view
+      +schema: staging
+    gold:
+      +materialized: table
+      +schema: gold
+
+seeds:
+  ruc_lakehouse:
+    +schema: reference
+    ubigeo:
+      +column_types:
+        ubigeo: varchar
+        department: varchar
+        province: varchar
+        district: varchar
+        natural_region: varchar

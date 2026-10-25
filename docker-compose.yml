@@ -125,6 +125,8 @@ services:
   # Jobs, run on demand:
   #   docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-10-25
   #   docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-10-25
+  #   docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver 2026-10-25
+  #   docker compose run --rm jobs dbt build
   jobs:
     image: ruc-lakehouse:dev
     build:
@@ -133,6 +135,7 @@ services:
     environment:
       <<: *lake-env
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-6g}
+      TRINO_HOST: trino
     volumes:
       # Snapshots written by the daily collector, read-only.
       - ${SNAPSHOTS_HOST_DIR:-./data/snapshots}:/snapshots:ro
