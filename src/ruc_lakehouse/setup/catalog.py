@@ -39,8 +39,10 @@ def request(method: str, url: str, body: dict[str, Any] | None = None) -> Any:
 def warehouse_body(settings: Settings) -> dict[str, Any]:
     """Warehouse on the local S3-compatible store, keys given by the clients.
 
-    Credential vending (STS) is off: Spark and Trino bring their own keys, as
-    they would bring an IAM role on AWS.
+    Credential vending (STS) and remote signing are off: Spark and Trino bring
+    their own keys, as they would bring an IAM role on AWS. Remote signing would
+    also be unsafe here, since MinIO-based stores do not check every part of a
+    signed request.
     """
     return {
         "warehouse-name": settings.warehouse,
@@ -54,6 +56,7 @@ def warehouse_body(settings: Settings) -> dict[str, Any]:
             "path-style-access": True,
             "flavor": "s3-compat",
             "sts-enabled": False,
+            "remote-signing-enabled": False,
         },
         "storage-credential": {
             "type": "s3",

@@ -19,10 +19,11 @@ def test_management_url_is_derived_from_the_catalog_uri():
     assert management_url(settings()) == "http://catalog:8181/management/v1"
 
 
-def test_warehouse_lives_in_the_lake_bucket_without_credential_vending():
+def test_warehouse_lets_clients_use_their_own_keys():
     body = warehouse_body(settings())
     profile = body["storage-profile"]
     assert body["warehouse-name"] == "ruc"
     assert profile["bucket"] == "lake"
     assert profile["sts-enabled"] is False
+    assert profile["remote-signing-enabled"] is False
     assert body["storage-credential"]["access-key-id"] == "key"
