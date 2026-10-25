@@ -1,0 +1,6 @@
+# Normalize line endings so scripts mounted into Linux containers keep LF.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gif binary
+*.zip binary
