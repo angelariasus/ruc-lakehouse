@@ -9,7 +9,7 @@ previous one and stores the changes as Iceberg tables with full history
 (SCD type 2): new taxpayers, deregistrations, and changes of status, address
 condition or location.
 
-> **Status:** phase 1 of 7, the local stack. See [Roadmap](#roadmap).
+> **Status:** phase 2 of 7, bronze. See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -27,6 +27,26 @@ managed services, so moving to the cloud is a configuration change:
 The active target is chosen with `LAKE_PROFILE` (`local` or `aws`); see
 [`src/ruc_lakehouse/config.py`](src/ruc_lakehouse/config.py).
 
+## Data flow
+
+| Step | Where | What happens |
+|---|---|---|
+| Collect | outside the repo | A daily task keeps one zip per day, since SUNAT keeps no history |
+| Landing | `s3://…/landing/` | The zip exactly as published, with its SHA-256. The header is checked against the [contract](src/ruc_lakehouse/contracts.py), so a schema change stops here |
+| Staging | `s3://…/staging/` | The same lines re-chunked into UTF-8 gzip parts: Spark cannot split a zip and would read 1.6 GB in one task |
+| Bronze | `bronze.padron_ruc` | One row per valid line, partitioned by snapshot date and sorted by RUC. Broken lines go to `bronze.padron_ruc_rejects` with the reason |
+
+Every load reconciles its counts with the landing marker and stops if more than
+0.1% of the lines are rejected; each run is recorded in `ops.ingestion_runs`.
+Landing and bronze can be re-run safely: the same file is skipped, and bronze
+replaces the snapshot's partition.
+
+One real snapshot (2026-10-25): **18,486,442 lines** in a 394 MB zip become
+310 MB of Parquet in about two minutes on a laptop. Only one line is rejected
+(an `AAAAAAAAAAA` RUC). SUNAT escapes the delimiter inside values (`\|`, and
+`\\` for a backslash), as in `EBEN EZER \| INGENIERIA Y ARQUITECTURA S.A.C.`;
+a naive split on `|` would lose those taxpayers.
+
 ## Quick start
 
 Requirements: Docker with about 6 GB of free memory.
@@ -35,7 +55,17 @@ Requirements: Docker with about 6 GB of free memory.
 cp .env.example .env          # then change the secrets
 docker compose up -d --build --wait
 docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
-docker compose exec trino trino --execute "select * from lakehouse.smoke.ping"
+```
+
+Load one snapshot. `SNAPSHOTS_HOST_DIR` in `.env` points at the folder with
+`raw/snapshot_date=YYYY-MM-DD/padron_reducido_ruc.zip`; to try it without the
+real file, generate a synthetic one:
+
+```bash
+uv run python tests/fixtures/make_snapshot.py data/snapshots 2026-01-15
+docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-01-15
+docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-01-15
+docker compose exec trino trino --execute "select count(*) from lakehouse.bronze.padron_ruc"
 ```
 
 | Service | URL |
@@ -57,7 +87,7 @@ uv run ruff check . && uv run ruff format --check .
 ## Roadmap
 
 - [x] Phase 1: local stack (storage, catalog, Spark, Trino) and CI
-- [ ] Phase 2: bronze, snapshots loaded as Iceberg tables with a schema contract
+- [x] Phase 2: bronze, snapshots loaded as Iceberg tables with a schema contract
 - [ ] Phase 3: silver, daily diff and SCD type 2 history
 - [ ] Phase 4: gold, dbt models on Trino with data tests
 - [ ] Phase 5: orchestration with Dagster (daily partitions, backfills)
