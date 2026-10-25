@@ -9,7 +9,7 @@ previous one and stores the changes as Iceberg tables with full history
 (SCD type 2): new taxpayers, deregistrations, and changes of status, address
 condition or location.
 
-> **Status:** phase 4 of 7, gold models. See [Roadmap](#roadmap).
+> **Status:** phase 5 of 7, orchestration. See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -23,6 +23,7 @@ managed services, so moving to the cloud is a configuration change:
 | PySpark 4.1 + Iceberg 1.12 | Ingestion and history (bronze, silver) | EMR Serverless |
 | Trino | SQL engine | Amazon Athena |
 | dbt (dbt-trino) | Gold models and data tests | dbt-athena |
+| Dagster | Orchestration: sensors, partitions, run queue | Dagster on ECS or Dagster+ |
 | Postgres | Catalog and orchestrator metadata only | Amazon RDS |
 
 The active target is chosen with `LAKE_PROFILE` (`local` or `aws`); see
@@ -91,6 +92,32 @@ On the real snapshot, `dbt build` takes about 40 seconds. Of the 2.37 million
 legal entities in the registry, 1.38 million are deregistered and 890,000 are
 active, half of them in Lima.
 
+## Orchestration
+
+Dagster runs the whole flow on its own once the stack is up:
+
+1. `new_snapshot_sensor` reads the collector's `manifest.jsonl` every five
+   minutes. For each stored snapshot it does not know, it adds a partition and
+   requests `ingest_snapshot` (landing, bronze, silver), oldest first.
+2. `gold_after_ingestion` requests `build_gold` (`dbt build`) after each
+   successful ingestion; dbt tests show up as asset checks.
+
+Design choices:
+
+- **Dynamic partitions, one per stored snapshot.** SUNAT does not publish every
+  day, so a daily calendar would list days with nothing to load. Days whose
+  file was identical to the previous one are skipped, as they bring no change.
+- **One run at a time** (`QueuedRunCoordinator`): silver applies dates in
+  order and every run starts a Spark session.
+- **Jobs stay command-line programs.** Each asset runs its job as a separate
+  process through Dagster Pipes and the job reports its metrics as
+  materialization metadata. Run by hand, the same commands work without
+  Dagster. On AWS, the Pipes client is the swap point: `PipesEMRServerlessClient`
+  would run the same module on EMR Serverless.
+
+The asset graph runs `landing → bronze → silver → staging → gold`, because
+the silver asset has the key dbt gives its source.
+
 ## Quick start
 
 Requirements: Docker with about 6 GB of free memory.
@@ -101,9 +128,10 @@ docker compose up -d --build --wait
 docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
 ```
 
-Load one snapshot. `SNAPSHOTS_HOST_DIR` in `.env` points at the folder with
-`raw/snapshot_date=YYYY-MM-DD/padron_reducido_ruc.zip`; to try it without the
-real file, generate a synthetic one:
+`SNAPSHOTS_HOST_DIR` in `.env` points at the collector's folder
+(`manifest.jsonl` and `raw/snapshot_date=YYYY-MM-DD/padron_reducido_ruc.zip`).
+Dagster loads every snapshot listed in the manifest on its own. The same steps
+also run by hand; to try them without the real file, generate a synthetic one:
 
 ```bash
 uv run python tests/fixtures/make_snapshot.py data/snapshots 2026-01-15
@@ -122,6 +150,7 @@ For a second day with known changes (30 removed, 30 renamed, 20 new), generate
 | Storage console | http://localhost:9001 |
 | Catalog API | http://localhost:8181 |
 | Trino | http://localhost:8080 |
+| Dagster | http://localhost:3000 |
 | Spark UI (while a job runs) | http://localhost:4040 |
 
 ## Development
@@ -144,7 +173,7 @@ The district seed is rebuilt from INEI's file with
 - [x] Phase 2: bronze, snapshots loaded as Iceberg tables with a schema contract
 - [x] Phase 3: silver, daily diff and SCD type 2 history
 - [x] Phase 4: gold, dbt models on Trino with data tests
-- [ ] Phase 5: orchestration with Dagster (daily partitions, backfills)
+- [x] Phase 5: orchestration with Dagster (sensors, partitions, run queue)
 - [ ] Phase 6: AWS infrastructure as code with Terraform
 - [ ] Phase 7: table maintenance, observability and documentation
 
