@@ -17,6 +17,16 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - run: uv run sqlfluff lint dbt/models dbt/tests
+
+  dbt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+      - run: uv sync --locked
+      # Parsing validates refs, sources, configs and tests without a database.
+      - run: uv run dbt parse --project-dir dbt --profiles-dir dbt
 
   test:
     runs-on: ubuntu-latest
@@ -27,7 +37,7 @@ jobs:
       - run: uv run pytest
 
   # Starts the whole local lakehouse, loads two synthetic days end to end (the
-  # second with known changes) and checks the result from Trino.
+  # second with known changes), builds gold and checks the result from Trino.
   stack:
     runs-on: ubuntu-latest
     env:
@@ -50,7 +60,8 @@ jobs:
             docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze "$day"
             docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver "$day"
           done
-      - name: Check bronze and silver from Trino
+      - run: docker compose run --rm jobs dbt build
+      - name: Check bronze, silver and gold from Trino
         run: |
           query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
           check() { echo "$1: got $2, expected $3"; test "$2" = "$3"; }
@@ -60,6 +71,11 @@ jobs:
           check "current rows" "$(query "select count_if(is_current) from lakehouse.silver.taxpayers_history")" 2990
           check "removed" "$(query "select count_if(end_reason = 'removed') from lakehouse.silver.taxpayers_history")" 30
           check "renamed" "$(query "select count_if(contains(changed_columns, 'name')) from lakehouse.silver.taxpayers_history")" 30
+          events() { query "select count(*) from lakehouse.gold.fct_taxpayer_events where snapshot_date = date '$DAY2' and event_type = '$1'"; }
+          check "registered events" "$(events registered)" 20
+          check "removed events" "$(events removed)" 30
+          check "name changes" "$(events name_changed)" 30
+          check "registry on day 2" "$(query "select sum(taxpayers) from lakehouse.gold.agg_registry_daily where snapshot_date = date '$DAY2'")" 2990
       - if: failure()
         run: docker compose logs
       - if: always()
