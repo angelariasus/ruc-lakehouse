@@ -26,28 +26,40 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest
 
-  # Starts the whole local lakehouse, loads a synthetic snapshot end to end and
-  # checks the result from Trino through the shared catalog.
+  # Starts the whole local lakehouse, loads two synthetic days end to end (the
+  # second with known changes) and checks the result from Trino.
   stack:
     runs-on: ubuntu-latest
     env:
-      SNAPSHOT_DATE: "2026-01-15"
+      DAY1: "2026-01-15"
+      DAY2: "2026-01-16"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.2
       - run: cp .env.example .env
-      - run: uv run --locked python tests/fixtures/make_snapshot.py data/snapshots "$SNAPSHOT_DATE"
+      - name: Generate snapshots (3,000 rows; day 2 removes 30, renames 30, adds 20)
+        run: |
+          uv run --locked python tests/fixtures/make_snapshot.py data/snapshots "$DAY1" 3000 0
+          uv run --locked python tests/fixtures/make_snapshot.py data/snapshots "$DAY2" 3000 1
       - run: docker compose up -d --build --wait
       - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
-      - run: docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing "$SNAPSHOT_DATE"
-      - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze "$SNAPSHOT_DATE"
-      - name: Check bronze from Trino
+      - name: Load both days
+        run: |
+          for day in "$DAY1" "$DAY2"; do
+            docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing "$day"
+            docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze "$day"
+            docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver "$day"
+          done
+      - name: Check bronze and silver from Trino
         run: |
           query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
-          loaded=$(query "select count(*) from lakehouse.bronze.padron_ruc where snapshot_date = date '$SNAPSHOT_DATE'")
-          rejected=$(query "select count(*) from lakehouse.bronze.padron_ruc_rejects where snapshot_date = date '$SNAPSHOT_DATE'")
-          echo "loaded=$loaded rejected=$rejected"
-          test "$loaded" = "3000" && test "$rejected" = "2"
+          check() { echo "$1: got $2, expected $3"; test "$2" = "$3"; }
+          check "bronze day 1" "$(query "select count(*) from lakehouse.bronze.padron_ruc where snapshot_date = date '$DAY1'")" 3000
+          check "rejects day 1" "$(query "select count(*) from lakehouse.bronze.padron_ruc_rejects where snapshot_date = date '$DAY1'")" 2
+          check "history rows" "$(query "select count(*) from lakehouse.silver.taxpayers_history")" 3050
+          check "current rows" "$(query "select count_if(is_current) from lakehouse.silver.taxpayers_history")" 2990
+          check "removed" "$(query "select count_if(end_reason = 'removed') from lakehouse.silver.taxpayers_history")" 30
+          check "renamed" "$(query "select count_if(contains(changed_columns, 'name')) from lakehouse.silver.taxpayers_history")" 30
       - if: failure()
         run: docker compose logs
       - if: always()
