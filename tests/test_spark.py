@@ -1,5 +1,9 @@
+import re
+from pathlib import Path
+
+from ruc_lakehouse import spark as spark_module
 from ruc_lakehouse.config import Settings
-from ruc_lakehouse.spark import CATALOG, ICEBERG_PACKAGES, SPARK_MINOR, iceberg_conf
+from ruc_lakehouse.spark import CATALOG, PACKAGES, SPARK_MINOR, iceberg_conf, s3a_conf
 
 PREFIX = f"spark.sql.catalog.{CATALOG}"
 
@@ -40,8 +44,26 @@ def test_aws_conf_signs_catalog_requests_and_has_no_keys():
     assert not any(key.startswith(f"{PREFIX}.s3.") for key in conf)
 
 
-def test_iceberg_runtime_matches_the_installed_spark_minor():
+def test_local_s3a_conf_uses_path_style_and_plain_http():
+    conf = s3a_conf(local_settings())
+    assert conf["spark.hadoop.fs.s3a.endpoint"] == "http://storage:9000"
+    assert conf["spark.hadoop.fs.s3a.path.style.access"] == "true"
+    assert conf["spark.hadoop.fs.s3a.connection.ssl.enabled"] == "false"
+
+
+def test_jars_match_the_installed_spark_and_hadoop():
     import pyspark
 
     assert pyspark.__version__.startswith(SPARK_MINOR + ".")
-    assert f"iceberg-spark-runtime-{SPARK_MINOR}_" in ICEBERG_PACKAGES[0]
+    assert f"iceberg-spark-runtime-{SPARK_MINOR}_" in PACKAGES[0]
+    jars = Path(pyspark.__file__).parent / "jars"
+    hadoop = f"hadoop-client-api-{spark_module.HADOOP_VERSION}.jar"
+    assert (jars / hadoop).exists(), f"PySpark no longer ships {hadoop}"
+
+
+def test_dockerfile_fetches_the_same_jar_versions():
+    dockerfile = (Path(__file__).parents[1] / "docker" / "app" / "Dockerfile").read_text()
+    args = dict(re.findall(r"^ARG (\w+)=(\S+)$", dockerfile, flags=re.MULTILINE))
+    for name in ("ICEBERG_VERSION", "SPARK_MINOR", "SCALA_VERSION", "HADOOP_VERSION"):
+        assert args[name] == getattr(spark_module, name), name
+    assert args["AWS_SDK_VERSION"] == spark_module.AWS_SDK_VERSION
