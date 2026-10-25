@@ -1,6 +1,7 @@
 # Local lakehouse. Each service stands in for an AWS one:
 #   storage  -> Amazon S3          catalog -> AWS Glue Data Catalog (Iceberg REST)
 #   trino    -> Amazon Athena      jobs    -> EMR Serverless (PySpark)
+#   dagster  -> Dagster on ECS or Dagster+ (orchestration)
 
 x-lake-env: &lake-env
   LAKE_PROFILE: ${LAKE_PROFILE}
@@ -11,6 +12,19 @@ x-lake-env: &lake-env
   S3_SECRET_KEY: ${S3_SECRET_KEY}
   CATALOG_URI: ${CATALOG_URI}
   CATALOG_WAREHOUSE: ${CATALOG_WAREHOUSE}
+
+x-jobs-env: &jobs-env
+  <<: *lake-env
+  SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-6g}
+  TRINO_HOST: trino
+
+x-dagster-env: &dagster-env
+  <<: *jobs-env
+  DAGSTER_POSTGRES_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/dagster
+
+x-app-build: &app-build
+  context: .
+  dockerfile: docker/app/Dockerfile
 
 x-catalog-env: &catalog-env
   LAKEKEEPER__PG_ENCRYPTION_KEY: ${CATALOG_ENCRYPTION_KEY}
@@ -94,9 +108,7 @@ services:
 
   catalog-init:
     image: ruc-lakehouse:dev
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
+    build: *app-build
     command: ["python", "-m", "ruc_lakehouse.setup.catalog"]
     environment: *lake-env
     depends_on:
@@ -129,13 +141,8 @@ services:
   #   docker compose run --rm jobs dbt build
   jobs:
     image: ruc-lakehouse:dev
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile
-    environment:
-      <<: *lake-env
-      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-6g}
-      TRINO_HOST: trino
+    build: *app-build
+    environment: *jobs-env
     volumes:
       # Snapshots written by the daily collector, read-only.
       - ${SNAPSHOTS_HOST_DIR:-./data/snapshots}:/snapshots:ro
@@ -146,6 +153,40 @@ services:
       - "4040:4040"
     profiles: ["jobs"]
 
+  # Orchestration. The daemon runs sensors and the run queue; runs (and their
+  # Spark jobs) execute inside it, so it gets the snapshots and the memory.
+  dagster-daemon:
+    image: ruc-lakehouse:dev
+    build: *app-build
+    command: ["dagster-daemon", "run", "-w", "/opt/dagster/home/workspace.yaml"]
+    environment: *dagster-env
+    volumes:
+      - ${SNAPSHOTS_HOST_DIR:-./data/snapshots}:/snapshots:ro
+      - dagster-logs:/opt/dagster/home/compute_logs
+    depends_on:
+      trino:
+        condition: service_healthy
+
+  dagster-webserver:
+    image: ruc-lakehouse:dev
+    build: *app-build
+    command:
+      ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/opt/dagster/home/workspace.yaml"]
+    environment: *dagster-env
+    volumes:
+      - dagster-logs:/opt/dagster/home/compute_logs
+    depends_on:
+      trino:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/server_info"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
 volumes:
   postgres-data:
   lake-data:
+  dagster-logs:

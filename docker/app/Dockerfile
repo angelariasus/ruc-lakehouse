@@ -35,15 +35,20 @@ RUN jars=$(python -c "import pyspark, pathlib; print(pathlib.Path(pyspark.__file
     && fetch software/amazon/awssdk s3-transfer-manager "$AWS_SDK_VERSION" \
     && fetch software/amazon/awssdk apache-client "$AWS_SDK_VERSION"
 
+RUN useradd --create-home --uid 1000 lake
+
 COPY src ./src
 RUN uv sync --locked --no-dev
-COPY dbt ./dbt
 
-# dbt writes its artifacts outside the read-only project folder.
 ENV DBT_PROJECT_DIR=/app/dbt \
     DBT_PROFILES_DIR=/app/dbt \
-    DBT_TARGET_PATH=/tmp/dbt/target \
-    DBT_LOG_PATH=/tmp/dbt/logs
+    DAGSTER_HOME=/opt/dagster/home
 
-RUN useradd --create-home --uid 1000 lake
+# dbt and Dagster write their artifacts and logs here at run time.
+COPY --chown=lake dbt ./dbt
+COPY --chown=lake docker/dagster $DAGSTER_HOME
+RUN mkdir -p $DAGSTER_HOME/compute_logs && chown lake $DAGSTER_HOME/compute_logs
+
 USER lake
+# The manifest Dagster reads to define the dbt assets; parsing needs no database.
+RUN dbt parse --quiet
