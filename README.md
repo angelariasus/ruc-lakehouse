@@ -1,16 +1,74 @@
+<div align="center">
+
 # ruc-lakehouse
 
-Cloud-ready lakehouse that turns SUNAT's daily taxpayer registry snapshots
-(*padrón reducido RUC*) into history.
+**A cloud-ready lakehouse that turns SUNAT's daily taxpayer snapshots into queryable history.**
 
-SUNAT publishes only the current state of every taxpayer: one ~390 MB zip,
-replaced every day. This project keeps each snapshot, compares it with the
-previous one and stores the changes as Iceberg tables with full history
-(SCD type 2): new taxpayers, deregistrations, and changes of status, address
-condition or location.
+[![CI](https://github.com/angelariasus/ruc-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/angelariasus/ruc-lakehouse/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Terraform: defined, not deployed](https://img.shields.io/badge/AWS-defined%2C%20not%20deployed-orange)](#aws-deployment)
 
-> **Status:** all seven phases done; the AWS side is defined and checked, not
-> deployed. See [Roadmap](#roadmap).
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Apache Spark](https://img.shields.io/badge/Apache%20Spark-4.1-E25A1C?logo=apachespark&logoColor=white)](https://spark.apache.org/)
+[![Apache Iceberg](https://img.shields.io/badge/Apache%20Iceberg-1.12-1B6AC9)](https://iceberg.apache.org/)
+[![Trino](https://img.shields.io/badge/Trino-484-DD00A1?logo=trino&logoColor=white)](https://trino.io/)
+[![dbt](https://img.shields.io/badge/dbt-1.12-FF694B)](https://www.getdbt.com/)
+[![Dagster](https://img.shields.io/badge/Dagster-1.13-4F43DD)](https://dagster.io/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Terraform](https://img.shields.io/badge/Terraform-1.17-844FBA?logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![AWS](https://img.shields.io/badge/AWS-S3%20%C2%B7%20Glue%20%C2%B7%20EMR%20Serverless%20%C2%B7%20Athena-FF9900)](infra/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![uv](https://img.shields.io/badge/uv-managed-DE5FE9?logo=uv&logoColor=white)](https://docs.astral.sh/uv/)
+[![Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](https://docs.astral.sh/ruff/)
+[![GitHub Actions](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
+
+</div>
+
+SUNAT, Peru's tax administration, publishes only the **current** state of every
+taxpayer: one ~390 MB zip, replaced every day, with no history. This project
+keeps each snapshot, compares it with the previous one and stores the changes
+as Apache Iceberg tables with full history (**SCD type 2**): new taxpayers,
+deregistrations, and changes of status, address condition or location.
+
+Everything runs locally in Docker, but only through interfaces AWS offers as
+managed services (S3, Glue, EMR Serverless, Athena). The AWS side is written in
+Terraform and checked in CI; it is **defined, not deployed**.
+
+## Highlights
+
+- **18.5 million rows per snapshot**, loaded end to end (landing, bronze and
+  silver) in about three minutes on a laptop; a daily increment takes 46 seconds
+  in silver.
+- **SCD type 2 in a single `MERGE`**: only new, changed and removed RUCs are
+  written each day, with merge-on-read and no stored row hash.
+- **Self-running**: a Dagster sensor detects each new snapshot and runs
+  landing, bronze, silver and the dbt gold layer with no manual step.
+- **Data contracts and guards**: header check against a schema contract, count
+  reconciliation, reject thresholds, in-order dates and a truncated-file guard.
+- **Operated like a product**: freshness policy, run log in `ops.job_runs`,
+  weekly table maintenance and a runbook.
+- **Infrastructure as code**: Terraform validated with `terraform test`
+  (mocked provider) and a full apply, idempotency check and destroy against
+  Moto.
+- **Tested on real data**: the end-to-end CI job loads two consecutive real
+  days, not generated ones.
+
+## Contents
+
+- [Architecture](#architecture)
+- [Tech stack](#tech-stack)
+- [Data flow](#data-flow)
+- [Gold models](#gold-models)
+- [Orchestration](#orchestration)
+- [Operations](#operations)
+- [AWS deployment](#aws-deployment)
+- [Quick start](#quick-start)
+- [Repository layout](#repository-layout)
+- [Testing and CI](#testing-and-ci)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
+- [Data source](#data-source)
+- [License](#license)
 
 ## Architecture
 
@@ -38,8 +96,8 @@ flowchart TB
     gold --> sql["Trino / Athena"]
 ```
 
-Everything runs locally in Docker, but only through interfaces AWS offers as
-managed services, so moving to the cloud is a configuration change:
+Each local service has a managed AWS counterpart, so moving to the cloud is a
+configuration change:
 
 | Local service | Role | AWS equivalent |
 |---|---|---|
@@ -52,8 +110,21 @@ managed services, so moving to the cloud is a configuration change:
 | Postgres | Catalog and orchestrator metadata only | Amazon RDS |
 
 The active target is chosen with `LAKE_PROFILE` (`local` or `aws`); see
-[`src/ruc_lakehouse/config.py`](src/ruc_lakehouse/config.py). The AWS side is
-written in Terraform in [`infra/`](infra/).
+[`src/ruc_lakehouse/config.py`](src/ruc_lakehouse/config.py).
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Table format | Apache Iceberg 1.12 (merge-on-read, partitioned and sorted writes) |
+| Processing | PySpark 4.1 |
+| SQL engine | Trino 484 |
+| Transformation | dbt-core 1.12 with dbt-trino, SQLFluff |
+| Orchestration | Dagster 1.13 (dynamic partitions, sensors, schedules, Pipes, freshness policies) |
+| Storage and catalog | Silo (S3-compatible), Lakekeeper (Iceberg REST), Postgres 17 |
+| Infrastructure | Terraform 1.17, AWS provider 6.x, TFLint, Moto |
+| Language and tooling | Python 3.12, uv, Ruff, pytest, pre-commit |
+| Packaging and CI | Docker Compose, GitHub Actions |
 
 ## Data flow
 
@@ -64,6 +135,7 @@ written in Terraform in [`infra/`](infra/).
 | Staging | `s3://…/staging/` | The same lines re-chunked into UTF-8 gzip parts: Spark cannot split a zip and would read 1.6 GB in one task |
 | Bronze | `bronze.padron_ruc` | One row per valid line, partitioned by snapshot date and sorted by RUC. Broken lines go to `bronze.padron_ruc_rejects` with the reason |
 | Silver | `silver.taxpayers_history` | One row per version of each RUC (SCD type 2): `valid_from`, `valid_to`, `is_current`, why it opened (`initial`, `new`, `changed`), which columns changed, and why it closed (`changed`, `removed`) |
+| Gold | `gold.*` | dbt models for reporting, see [Gold models](#gold-models) |
 
 Every load reconciles its counts with the landing marker and stops if more than
 0.1% of the lines are rejected; each run is recorded in `ops.job_runs`.
@@ -81,6 +153,8 @@ as a probable truncated file. Two design choices keep the daily cost low:
   small delete file, and compaction merges them later.
 - **No stored hash.** A SHA-256 per row does not compress: storing it made the
   table 977 MB instead of 323 MB. It is recomputed on both sides at run time.
+
+### What the real data looks like
 
 One real snapshot (2026-10-25): **18,486,442 lines** in a 394 MB zip become
 310 MB of Parquet in bronze in about two minutes on a laptop, and the initial
@@ -124,6 +198,9 @@ codes of districts reorganized after 2016, mostly in Loreto.
 On the real snapshot, `dbt build` takes about 40 seconds. Of the 2.37 million
 legal entities in the registry, 1.38 million are deregistered and 890,000 are
 active, half of them in Lima.
+
+> **Privacy.** RUCs starting with `10` belong to natural persons. Gold exposes
+> their RUC only as part of counts and never their names.
 
 ## Orchestration
 
@@ -223,7 +300,27 @@ Silver applies days in order, so run the earlier dates first.
 | Dagster | http://localhost:3000 |
 | Spark UI (while a job runs) | http://localhost:4040 |
 
-## Development
+## Repository layout
+
+```text
+.
+├── src/ruc_lakehouse/
+│   ├── ingest/          # landing: zip to S3, re-chunked staging parts
+│   ├── jobs/            # bronze, silver (SCD2), maintenance, smoke
+│   ├── orchestration/   # Dagster assets, sensors, schedules, dbt wiring
+│   ├── reference/       # INEI district list for the dbt seed
+│   ├── setup/           # catalog bootstrap
+│   ├── contracts.py     # source schema contract
+│   └── config.py        # local and aws profiles
+├── dbt/                 # staging views, gold models, seed and data tests
+├── infra/               # Terraform for the AWS side, with unit and Moto tests
+├── docker/              # app, Dagster, Trino, Postgres and EMR images
+├── docs/                # operations runbook and cost estimate
+├── tests/               # unit tests and the end-to-end sample
+└── docker-compose.yml   # the local stack
+```
+
+## Testing and CI
 
 ```bash
 uv sync
@@ -234,17 +331,33 @@ uv run sqlfluff lint dbt/models dbt/tests
 uv run dbt parse --project-dir dbt --profiles-dir dbt
 ```
 
-CI runs the same checks plus the Terraform ones and an end-to-end job: it
-starts the stack, loads two consecutive real days and checks bronze, silver,
-gold and the maintenance from Trino. A runner cannot hold two 394 MB files, so
-the job uses a small real sample, [`tests/e2e/snapshots`](tests/e2e/snapshots):
-3,155 legal entities from 2026-10-25 and 2026-10-26, including the 155 that
-changed and the 39 that appeared. `tests/e2e/build_sample.py` cuts it from the
-collector's files. The unit tests use a few invented lines for the cases a real
-file almost never has (a broken line, an escaped delimiter).
+GitHub Actions runs five jobs on every push:
 
-The sample has no removed taxpayers, because none was removed between those two
-days, so that path is covered by the silver unit tests only.
+| Job | What it checks |
+|---|---|
+| `lint` | Ruff and SQLFluff |
+| `test` | Unit tests, including the Spark ones, with S3 mocked by Moto |
+| `dbt` | The dbt project parses |
+| `infra` | Terraform fmt, validate, TFLint, `terraform test`, and an apply, empty second plan and destroy against Moto |
+| `stack` | End to end: starts the whole Docker stack, loads two consecutive real days and checks bronze, silver, gold and the maintenance from Trino |
+
+A runner cannot hold two 394 MB files, so the `stack` job uses a small real
+sample, [`tests/e2e/snapshots`](tests/e2e/snapshots): 3,155 legal entities from
+2026-10-25 and 2026-10-26, including the 155 that changed and the 39 that
+appeared. `tests/e2e/build_sample.py` cuts it from the collector's files. The
+unit tests use a few invented lines for the cases a real file almost never has
+(a broken line, an escaped delimiter).
+
+## Limitations
+
+- **No real deregistration is covered end to end.** None was removed between the
+  two sample days, so that path is tested only by the silver unit tests.
+- **The AWS side is not deployed.** It is validated against Moto, which is not
+  AWS. Open points: where Dagster runs on AWS, the daily download on AWS, and a
+  dbt-athena target. See [`infra/README.md`](infra/README.md).
+- **The collector is a scheduled task on a laptop.** A day with the machine off
+  is a snapshot SUNAT does not hand out again.
+- **Little history yet.** The daily churn figures come from one pair of days.
 
 ## Roadmap
 
