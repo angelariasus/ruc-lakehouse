@@ -103,8 +103,7 @@ steps each week:
    days, such as the output of a failed write.
 
 On the real lake, the first pass took 20 seconds and freed 310 MB from a
-re-run of bronze and 115 MB from a replaced gold table. In CI, it folds day 2's
-delete files into silver without changing a row.
+re-run of bronze and 115 MB from a replaced gold table.
 
 ## Disk use on this machine
 

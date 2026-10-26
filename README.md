@@ -89,6 +89,13 @@ silver load takes another minute and a half. Only one line is rejected
 `\\` for a backslash), as in `EBEN EZER \| INGENIERIA Y ARQUITECTURA S.A.C.`;
 a naive split on `|` would lose those taxpayers.
 
+The second real day (2026-10-26), loaded by Dagster's sensor with no manual
+step, shows how little changes between snapshots: **228 new taxpayers and 277
+with at least one changed attribute** out of 18.5 million, none removed. Bronze
+took two minutes, and silver applied the 505 new versions in 46 seconds. The
+277 changes are 145 status, 126 address condition, 99 address, 54 location and
+2 name changes (one taxpayer can change several columns at once).
+
 ## Gold models
 
 dbt builds the reporting layer on Trino (`gold` schema), with
@@ -196,19 +203,17 @@ docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
 `SNAPSHOTS_HOST_DIR` in `.env` points at the collector's folder
 (`manifest.jsonl` and `raw/snapshot_date=YYYY-MM-DD/padron_reducido_ruc.zip`).
 Dagster loads every snapshot listed in the manifest on its own. The same steps
-also run by hand; to try them without the real file, generate a synthetic one:
+also run by hand, for any date in the manifest:
 
 ```bash
-uv run python tests/fixtures/make_snapshot.py data/snapshots 2026-01-15
-docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-01-15
-docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-01-15
-docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver 2026-01-15
+docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing 2026-10-25
+docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze 2026-10-25
+docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver 2026-10-25
 docker compose run --rm jobs dbt build
 docker compose exec trino trino --execute "select * from lakehouse.gold.agg_registry_daily"
 ```
 
-For a second day with known changes (30 removed, 30 renamed, 20 new), generate
-`2026-01-16 3000 1`, run the same three jobs for that date and `dbt build`.
+Silver applies days in order, so run the earlier dates first.
 
 | Service | URL |
 |---|---|
@@ -228,6 +233,11 @@ uv run ruff check . && uv run ruff format --check .
 uv run sqlfluff lint dbt/models dbt/tests
 uv run dbt parse --project-dir dbt --profiles-dir dbt
 ```
+
+CI runs the same checks plus the Terraform ones. The unit tests use a few
+invented lines for the cases a real file almost never has (a broken line, an
+escaped delimiter). Full loads are checked locally against the collector's real
+snapshots, since a runner cannot hold two 394 MB files.
 
 The district seed is rebuilt from INEI's file with
 `uv run python -m ruc_lakehouse.reference.ubigeo dbt/seeds/ubigeo.csv`.
