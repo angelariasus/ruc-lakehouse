@@ -38,6 +38,57 @@ jobs:
       - run: uv run dbt parse --project-dir dbt --profiles-dir dbt
       - run: uv run pytest
 
+  # The AWS deployment, checked without an AWS account: lint, unit tests with a
+  # mocked provider, then a full apply against Moto (an AWS API emulator), a
+  # second plan that must show no changes, and a destroy.
+  infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    env:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.65.0
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: tflint --init && tflint --format compact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: terraform test
+      - name: Start Moto
+        run: |
+          docker run -d --name moto -p 5000:5000 \
+            -v "$PWD/tests/moto/server.py:/opt/moto/server.py:ro" \
+            --entrypoint python motoserver/moto:5.2.4 /opt/moto/server.py -H 0.0.0.0 -p 5000
+          # The provider sends S3 Control calls to <account id>.<endpoint host>.
+          echo "127.0.0.1 123456789012.localhost" | sudo tee -a /etc/hosts
+          timeout 60 sh -c 'until curl -sf http://localhost:5000/moto-api/ > /dev/null; do sleep 1; done'
+      - name: Apply, check for drift, destroy
+        env:
+          AWS_ENDPOINT_URL: http://localhost:5000
+        run: |
+          cp tests/moto/override.tf override.tf
+          terraform init -input=false -reconfigure
+          terraform apply -auto-approve -input=false -var-file=tests/moto.tfvars
+          terraform plan -detailed-exitcode -input=false -var-file=tests/moto.tfvars
+          test "$(aws glue get-databases --query 'length(DatabaseList)')" = 6
+          test "$(aws emr-serverless list-applications --query 'length(applications)')" = 1
+          terraform destroy -auto-approve -input=false -var-file=tests/moto.tfvars
+      - if: failure()
+        run: docker logs moto 2>&1 | tail -100
+
   # Starts the whole local lakehouse, loads two synthetic days end to end (the
   # second with known changes), builds gold and checks the result from Trino.
   stack:
