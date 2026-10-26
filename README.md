@@ -9,9 +9,34 @@ previous one and stores the changes as Iceberg tables with full history
 (SCD type 2): new taxpayers, deregistrations, and changes of status, address
 condition or location.
 
-> **Status:** phase 6 of 7, AWS infrastructure as code. See [Roadmap](#roadmap).
+> **Status:** all seven phases done; the AWS side is defined and checked, not
+> deployed. See [Roadmap](#roadmap).
 
 ## Architecture
+
+```mermaid
+flowchart TB
+    sunat["SUNAT<br/>daily zip"] --> collector["Collector<br/>scheduled task"]
+    collector -- "zip + manifest" --> sensor
+
+    subgraph dagster["Dagster"]
+        direction LR
+        sensor["new snapshot<br/>sensor"] --> ingest["ingest_snapshot<br/>landing, bronze, silver"]
+        ingest --> gold_job["build_gold<br/>dbt build"]
+        weekly["weekly<br/>schedule"] --> maintain["maintain_tables"]
+    end
+
+    subgraph lake["Lakehouse: S3 + Iceberg catalog"]
+        direction LR
+        landing[("landing<br/>zip")] --> staging[("staging<br/>gzip parts")]
+        staging --> bronze[("bronze")]
+        bronze --> silver[("silver<br/>SCD2 history")]
+        silver --> gold[("gold")]
+    end
+
+    dagster -- "Python, Spark, dbt on Trino" --> lake
+    gold --> sql["Trino / Athena"]
+```
 
 Everything runs locally in Docker, but only through interfaces AWS offers as
 managed services, so moving to the cloud is a configuration change:
@@ -102,6 +127,8 @@ Dagster runs the whole flow on its own once the stack is up:
    requests `ingest_snapshot` (landing, bronze, silver), oldest first.
 2. `gold_after_ingestion` requests `build_gold` (`dbt build`) after each
    successful ingestion; dbt tests show up as asset checks.
+3. `weekly_maintenance` runs the table maintenance early on Sundays (see
+   [Operations](#operations)).
 
 Design choices:
 
@@ -118,6 +145,20 @@ Design choices:
 
 The asset graph runs `landing → bronze → silver → staging → gold`, because
 the silver asset has the key dbt gives its source.
+
+## Operations
+
+[`docs/operations.md`](docs/operations.md) covers the daily routine, the
+health signals and what to do when a check stops a load. In short:
+
+- **Freshness.** Dagster warns when the history is more than 30 hours old and
+  fails after 48.
+- **Run log.** Every job records its metrics in `ops.job_runs`, queryable from
+  Trino.
+- **Weekly maintenance.** On Sundays, bronze keeps its last two weeks, silver's
+  daily delete files are compacted, snapshots older than a week expire, and
+  orphan files are removed. The first pass on the real lake freed 425 MB of the
+  1.17 GB stored.
 
 ## AWS deployment
 
@@ -138,6 +179,9 @@ The job image ([`docker/emr/Dockerfile`](docker/emr/Dockerfile)) builds on EMR
 Serverless's own Spark 4.1 image. Locally it runs the smoke job against the
 Docker catalog and storage, with AWS's Spark and Iceberg builds. See
 [`infra/README.md`](infra/README.md) for the design and the deployment steps.
+
+Deployed, it would cost **about US$9 a month**, nearly all Spark compute, and
+nothing between jobs ([estimate](docs/costs.md)).
 
 ## Quick start
 
@@ -196,7 +240,7 @@ The district seed is rebuilt from INEI's file with
 - [x] Phase 4: gold, dbt models on Trino with data tests
 - [x] Phase 5: orchestration with Dagster (sensors, partitions, run queue)
 - [x] Phase 6: AWS infrastructure as code with Terraform (defined, checked against Moto)
-- [ ] Phase 7: table maintenance, observability and documentation
+- [x] Phase 7: table maintenance, observability and documentation
 
 ## Data source
 
