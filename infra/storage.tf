@@ -75,8 +75,12 @@ resource "aws_s3_bucket_versioning" "lake" {
 resource "aws_s3_bucket_lifecycle_configuration" "lake" {
   bucket = aws_s3_bucket.this["lake"].id
 
+  # Versioning keeps every deleted or overwritten object as a noncurrent
+  # version, so each prefix also says how long to keep those.
+
   # The zips are the raw history: keep them, but in a cheaper class once the
   # day has been loaded. Instant Retrieval still allows a re-run at any time.
+  # A zip deleted or overwritten by mistake stays recoverable for a while.
   rule {
     id     = "archive-landing"
     status = "Enabled"
@@ -87,8 +91,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake" {
       days          = var.landing_archive_days
       storage_class = "GLACIER_IR"
     }
+    noncurrent_version_expiration {
+      noncurrent_days = var.landing_version_days
+    }
   }
 
+  # Rebuilt from landing whenever needed: no point keeping old versions.
   rule {
     id     = "expire-staging"
     status = "Enabled"
@@ -98,17 +106,28 @@ resource "aws_s3_bucket_lifecycle_configuration" "lake" {
     expiration {
       days = var.staging_expiry_days
     }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
   }
 
-  # Iceberg deletes data files when snapshots expire; versioning keeps them as
-  # noncurrent versions for a while, as a safety net.
+  # Files deleted by snapshot expiry (src/ruc_lakehouse/jobs/maintenance.py),
+  # kept one more week as a safety net.
   rule {
-    id     = "clean-old-versions"
+    id     = "expire-old-table-files"
+    status = "Enabled"
+    filter {
+      prefix = "warehouse/"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+
+  rule {
+    id     = "abort-incomplete-uploads"
     status = "Enabled"
     filter {}
-    noncurrent_version_expiration {
-      noncurrent_days = var.noncurrent_version_days
-    }
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }

@@ -43,8 +43,8 @@ variable "staging_expiry_days" {
   default     = 7
 }
 
-variable "noncurrent_version_days" {
-  description = "Days to keep overwritten or deleted object versions in the lake bucket."
+variable "landing_version_days" {
+  description = "Days a landed zip stays recoverable after being deleted or overwritten."
   type        = number
   default     = 30
 }

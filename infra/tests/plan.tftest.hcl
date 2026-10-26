@@ -64,6 +64,13 @@ run "landing_is_archived_never_deleted" {
     ]).expiration[0].days == 7
     error_message = "Staging must expire after a week."
   }
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.lake.rule :
+      length(rule.noncurrent_version_expiration) == 1 if rule.id != "abort-incomplete-uploads"
+    ])
+    error_message = "Every prefix must bound how long old versions are kept."
+  }
 }
 
 run "glue_has_a_database_per_layer_under_the_warehouse" {

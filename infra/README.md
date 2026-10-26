@@ -22,8 +22,9 @@ API emulator, but it has not run against a real account.
 - **Landing is never deleted.** SUNAT keeps no history, so the zips are the
   only copy of each day. They move to Glacier Instant Retrieval after 30 days
   (about a sixth of the price) and stay readable at once for a re-run. The
-  lake bucket is versioned; staging, which can be rebuilt from landing, expires
-  after a week.
+  lake bucket is versioned, and each prefix bounds its old versions: 30 days
+  for a zip deleted by mistake, 7 for table files removed by maintenance, 1 for
+  staging. Staging can be rebuilt from landing, so it expires after a week.
 - **Least privilege per role.** The Spark jobs read staging and write only the
   `bronze`, `silver` and `ops` tables. Dagster (the orchestrator policy) lands
   files, starts jobs, can pass the job role only to EMR Serverless, and runs dbt
