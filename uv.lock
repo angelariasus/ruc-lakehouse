@@ -1934,6 +1934,10 @@ dev = [
     { name = "ruff" },
     { name = "sqlfluff" },
 ]
+job = [
+    { name = "boto3" },
+    { name = "dagster-pipes" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1956,6 +1960,10 @@ dev = [
     { name = "pytest", specifier = ">=9.0" },
     { name = "ruff", specifier = ">=0.17" },
     { name = "sqlfluff", specifier = ">=4.0" },
+]
+job = [
+    { name = "boto3", specifier = ">=1.40" },
+    { name = "dagster-pipes", specifier = ">=1.13,<1.14" },
 ]
 
 [[package]]

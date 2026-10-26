@@ -9,3 +9,5 @@ dbt/target
 dbt/logs
 dbt/dbt_packages
 .env
+.github
+infra

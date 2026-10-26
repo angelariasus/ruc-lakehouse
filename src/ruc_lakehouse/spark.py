@@ -28,6 +28,8 @@ PACKAGES = (
     f"software.amazon.awssdk:s3-transfer-manager:{AWS_SDK_VERSION}",
     f"software.amazon.awssdk:apache-client:{AWS_SDK_VERSION}",
 )
+# Where the EMR runtime (EMR Serverless and its job image) keeps Iceberg.
+EMR_ICEBERG_DIR = Path("/usr/share/aws/iceberg/lib")
 
 
 def iceberg_conf(settings: Settings) -> dict[str, str]:
@@ -80,8 +82,14 @@ def s3a_conf(settings: Settings) -> dict[str, str]:
     return conf
 
 
-def jars_bundled() -> bool:
-    """True when the extra jars ship inside PySpark (as in the project image)."""
+def jars_bundled(emr_iceberg_dir: Path = EMR_ICEBERG_DIR) -> bool:
+    """True when the runtime already has the extra jars on Spark's classpath.
+
+    The project image ships them inside PySpark; the EMR runtime ships its own
+    Iceberg, S3A and AWS SDK builds.
+    """
+    if emr_iceberg_dir.is_dir():
+        return True
     spec = find_spec("pyspark")
     if spec is None or spec.origin is None:
         return False

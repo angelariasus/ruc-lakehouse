@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [dependency-groups]
+# What the Spark jobs import on EMR Serverless, whose runtime provides Spark
+# (see docker/emr/Dockerfile).
+job = [
+    "boto3>=1.40",
+    "dagster-pipes>=1.13,<1.14",
+]
 dev = [
     "moto[s3]>=5.2",
     "pre-commit>=4.0",

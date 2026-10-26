@@ -61,6 +61,10 @@ def test_jars_match_the_installed_spark_and_hadoop():
     assert (jars / hadoop).exists(), f"PySpark no longer ships {hadoop}"
 
 
+def test_the_emr_runtime_counts_as_bundled(tmp_path):
+    assert spark_module.jars_bundled(emr_iceberg_dir=tmp_path)
+
+
 def test_dockerfile_fetches_the_same_jar_versions():
     dockerfile = (Path(__file__).parents[1] / "docker" / "app" / "Dockerfile").read_text()
     args = dict(re.findall(r"^ARG (\w+)=(\S+)$", dockerfile, flags=re.MULTILINE))
