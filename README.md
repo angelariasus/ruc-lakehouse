@@ -9,7 +9,7 @@ previous one and stores the changes as Iceberg tables with full history
 (SCD type 2): new taxpayers, deregistrations, and changes of status, address
 condition or location.
 
-> **Status:** phase 5 of 7, orchestration. See [Roadmap](#roadmap).
+> **Status:** phase 6 of 7, AWS infrastructure as code. See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -27,7 +27,8 @@ managed services, so moving to the cloud is a configuration change:
 | Postgres | Catalog and orchestrator metadata only | Amazon RDS |
 
 The active target is chosen with `LAKE_PROFILE` (`local` or `aws`); see
-[`src/ruc_lakehouse/config.py`](src/ruc_lakehouse/config.py).
+[`src/ruc_lakehouse/config.py`](src/ruc_lakehouse/config.py). The AWS side is
+written in Terraform in [`infra/`](infra/).
 
 ## Data flow
 
@@ -118,6 +119,26 @@ Design choices:
 The asset graph runs `landing → bronze → silver → staging → gold`, because
 the silver asset has the key dbt gives its source.
 
+## AWS deployment
+
+[`infra/`](infra/) defines the AWS side in Terraform: S3 buckets, Glue
+databases, an Athena workgroup, an EMR Serverless application with its job
+image in ECR, least-privilege IAM and a monthly budget. It is **defined, not
+deployed**: there is no AWS account behind this project, so CI checks it in
+three steps:
+
+1. Lint: `terraform fmt`, `validate` and TFLint with the AWS rules.
+2. Unit tests with a mocked provider. They check, for example, that landing is
+   archived but never deleted, and that the Spark jobs cannot write landing or
+   gold.
+3. A full apply against [Moto](https://github.com/getmoto/moto), an AWS API
+   emulator, then a second plan that must be empty, then a destroy.
+
+The job image ([`docker/emr/Dockerfile`](docker/emr/Dockerfile)) builds on EMR
+Serverless's own Spark 4.1 image. Locally it runs the smoke job against the
+Docker catalog and storage, with AWS's Spark and Iceberg builds. See
+[`infra/README.md`](infra/README.md) for the design and the deployment steps.
+
 ## Quick start
 
 Requirements: Docker with about 6 GB of free memory.
@@ -174,7 +195,7 @@ The district seed is rebuilt from INEI's file with
 - [x] Phase 3: silver, daily diff and SCD type 2 history
 - [x] Phase 4: gold, dbt models on Trino with data tests
 - [x] Phase 5: orchestration with Dagster (sensors, partitions, run queue)
-- [ ] Phase 6: AWS infrastructure as code with Terraform
+- [x] Phase 6: AWS infrastructure as code with Terraform (defined, checked against Moto)
 - [ ] Phase 7: table maintenance, observability and documentation
 
 ## Data source
