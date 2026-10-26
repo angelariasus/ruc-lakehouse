@@ -11,11 +11,13 @@ Serverless by swapping the Pipes client (``PipesEMRServerlessClient``).
 """
 
 import sys
+from datetime import timedelta
 
 from dagster import (
     AssetExecutionContext,
     AssetKey,
     DynamicPartitionsDefinition,
+    FreshnessPolicy,
     MaterializeResult,
     PipesSubprocessClient,
     asset,
@@ -27,6 +29,12 @@ LANDING = AssetKey(["landing", "padron_ruc"])
 BRONZE = AssetKey(["bronze", "padron_ruc"])
 # Same key dbt gives its source, so gold models hang off this asset.
 SILVER = AssetKey(["silver", "taxpayers_history"])
+
+# SUNAT publishes every day, but a day whose file is identical to the previous
+# one loads nothing: warn after a day and a half, fail after two days.
+HISTORY_FRESHNESS = FreshnessPolicy.time_window(
+    fail_window=timedelta(hours=48), warn_window=timedelta(hours=30)
+)
 
 
 def run_job(
@@ -65,6 +73,7 @@ def bronze(context: AssetExecutionContext, pipes: PipesSubprocessClient) -> Mate
     partitions_def=snapshots,
     group_name="history",
     kinds={"spark", "iceberg"},
+    freshness_policy=HISTORY_FRESHNESS,
     description="SCD type 2 history of every RUC; dates must be applied in order.",
 )
 def silver(context: AssetExecutionContext, pipes: PipesSubprocessClient) -> MaterializeResult:

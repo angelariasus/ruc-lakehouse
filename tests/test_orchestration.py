@@ -26,6 +26,18 @@ def test_definitions_load():
     defs.validate_loadable(defs)
     assert defs.resolve_job_def("ingest_snapshot")
     assert defs.resolve_job_def("build_gold")
+    assert defs.resolve_job_def("maintain_tables")
+
+
+def test_maintenance_runs_weekly_before_the_collector():
+    schedule = defs.resolve_schedule_def("weekly_maintenance")
+    assert schedule.cron_schedule == "0 4 * * 0"
+    assert schedule.execution_timezone == "America/Lima"
+
+
+def test_history_has_a_freshness_policy():
+    spec = defs.resolve_assets_def(SILVER).specs_by_key[SILVER]
+    assert spec.freshness_policy is not None
 
 
 def test_gold_hangs_off_silver_and_layers_chain():
