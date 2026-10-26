@@ -129,6 +129,18 @@ jobs:
           check "removed events" "$(events removed)" 30
           check "name changes" "$(events name_changed)" 30
           check "registry on day 2" "$(query "select sum(taxpayers) from lakehouse.gold.agg_registry_daily where snapshot_date = date '$DAY2'")" 2990
+      # Day 2's merge left delete files in silver: compaction must fold them in
+      # without changing a row. Bronze keeps only day 2 with --bronze-days 0.
+      - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.maintenance --bronze-days 0
+      - name: Check the tables after maintenance
+        run: |
+          query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
+          check() { echo "$1: got $2, expected $3"; test "$2" = "$3"; }
+          check "silver delete files" "$(query "select count(*) from lakehouse.silver.\"taxpayers_history\$files\" where content <> 0")" 0
+          check "history rows" "$(query "select count(*) from lakehouse.silver.taxpayers_history")" 3050
+          check "current rows" "$(query "select count_if(is_current) from lakehouse.silver.taxpayers_history")" 2990
+          check "bronze days" "$(query "select count(distinct snapshot_date) from lakehouse.bronze.padron_ruc")" 1
+          check "maintenance run" "$(query "select status from lakehouse.ops.job_runs where job = 'maintenance'")" succeeded
       - if: failure()
         run: docker compose logs
       - if: always()
