@@ -234,13 +234,17 @@ uv run sqlfluff lint dbt/models dbt/tests
 uv run dbt parse --project-dir dbt --profiles-dir dbt
 ```
 
-CI runs the same checks plus the Terraform ones. The unit tests use a few
-invented lines for the cases a real file almost never has (a broken line, an
-escaped delimiter). Full loads are checked locally against the collector's real
-snapshots, since a runner cannot hold two 394 MB files.
+CI runs the same checks plus the Terraform ones and an end-to-end job: it
+starts the stack, loads two consecutive real days and checks bronze, silver,
+gold and the maintenance from Trino. A runner cannot hold two 394 MB files, so
+the job uses a small real sample, [`tests/e2e/snapshots`](tests/e2e/snapshots):
+3,155 legal entities from 2026-10-25 and 2026-10-26, including the 155 that
+changed and the 39 that appeared. `tests/e2e/build_sample.py` cuts it from the
+collector's files. The unit tests use a few invented lines for the cases a real
+file almost never has (a broken line, an escaped delimiter).
 
-The district seed is rebuilt from INEI's file with
-`uv run python -m ruc_lakehouse.reference.ubigeo dbt/seeds/ubigeo.csv`.
+The sample has no removed taxpayers, because none was removed between those two
+days, so that path is covered by the silver unit tests only.
 
 ## Roadmap
 
