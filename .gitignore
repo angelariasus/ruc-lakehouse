@@ -28,3 +28,12 @@ data/
 Thumbs.db
 .vscode/
 .idea/
+
+# Terraform
+infra/.terraform/
+*.tfstate
+*.tfstate.*
+*_override.tf
+infra/terraform.tfvars
+infra/backend.hcl
+infra/override.tf
