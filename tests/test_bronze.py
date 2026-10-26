@@ -2,7 +2,7 @@ import pytest
 
 from ruc_lakehouse import contracts
 from ruc_lakehouse.jobs.bronze import ContractViolation, check_counts, parse
-from tests.fixtures.make_snapshot import BAD_LINES, valid_line
+from tests.fixtures.sample_lines import BAD_LINES, valid_line
 
 
 def test_counts_must_reconcile_with_the_landing_marker():

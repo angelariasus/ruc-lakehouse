@@ -11,7 +11,7 @@ from ruc_lakehouse import contracts
 from ruc_lakehouse.config import Settings
 from ruc_lakehouse.ingest.landing import SchemaDriftError, land
 from ruc_lakehouse.storage import MARKER, landing_key, staging_prefix
-from tests.fixtures.make_snapshot import BAD_LINES, make_snapshot
+from tests.fixtures.sample_lines import BAD_LINES, make_snapshot
 
 DAY = date(2026, 1, 15)
 SETTINGS = Settings(profile="aws", bucket="lake", region="us-east-1", catalog_uri="", warehouse="")
