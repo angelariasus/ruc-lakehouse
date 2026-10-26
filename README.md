@@ -1,8 +1,6 @@
 <div align="center">
 
-# ruc-lakehouse
-
-**A cloud-ready lakehouse that turns SUNAT's daily taxpayer snapshots into queryable history.**
+<img src="docs/images/banner.png" alt="ruc-lakehouse: a cloud-ready lakehouse that turns SUNAT's daily taxpayer snapshots into queryable history" width="100%">
 
 [![CI](https://github.com/angelariasus/ruc-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/angelariasus/ruc-lakehouse/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -66,35 +64,12 @@ Terraform and checked in CI; it is **defined, not deployed**.
 - [Repository layout](#repository-layout)
 - [Testing and CI](#testing-and-ci)
 - [Limitations](#limitations)
-- [Roadmap](#roadmap)
 - [Data source](#data-source)
 - [License](#license)
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    sunat["SUNAT<br/>daily zip"] --> collector["Collector<br/>scheduled task"]
-    collector -- "zip + manifest" --> sensor
-
-    subgraph dagster["Dagster"]
-        direction LR
-        sensor["new snapshot<br/>sensor"] --> ingest["ingest_snapshot<br/>landing, bronze, silver"]
-        ingest --> gold_job["build_gold<br/>dbt build"]
-        weekly["weekly<br/>schedule"] --> maintain["maintain_tables"]
-    end
-
-    subgraph lake["Lakehouse: S3 + Iceberg catalog"]
-        direction LR
-        landing[("landing<br/>zip")] --> staging[("staging<br/>gzip parts")]
-        staging --> bronze[("bronze")]
-        bronze --> silver[("silver<br/>SCD2 history")]
-        silver --> gold[("gold")]
-    end
-
-    dagster -- "Python, Spark, dbt on Trino" --> lake
-    gold --> sql["Trino / Athena"]
-```
+![Architecture: SUNAT to collector, Dagster orchestration, the lakehouse layers on S3 and Iceberg, serving with Trino, and the local to AWS mapping](docs/images/architecture.png)
 
 Each local service has a managed AWS counterpart, so moving to the cloud is a
 configuration change:
@@ -203,6 +178,8 @@ active, half of them in Lima.
 > their RUC only as part of counts and never their names.
 
 ## Orchestration
+
+![Dagster's asset lineage: landing, bronze and silver, then the dbt gold models with their checks](docs/images/dagster-lineage.gif)
 
 Dagster runs the whole flow on its own once the stack is up:
 
@@ -358,16 +335,6 @@ unit tests use a few invented lines for the cases a real file almost never has
 - **The collector is a scheduled task on a laptop.** A day with the machine off
   is a snapshot SUNAT does not hand out again.
 - **Little history yet.** The daily churn figures come from one pair of days.
-
-## Roadmap
-
-- [x] Phase 1: local stack (storage, catalog, Spark, Trino) and CI
-- [x] Phase 2: bronze, snapshots loaded as Iceberg tables with a schema contract
-- [x] Phase 3: silver, daily diff and SCD type 2 history
-- [x] Phase 4: gold, dbt models on Trino with data tests
-- [x] Phase 5: orchestration with Dagster (sensors, partitions, run queue)
-- [x] Phase 6: AWS infrastructure as code with Terraform (defined, checked against Moto)
-- [x] Phase 7: table maintenance, observability and documentation
 
 ## Data source
 
