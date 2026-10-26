@@ -88,3 +88,60 @@ jobs:
           terraform destroy -auto-approve -input=false -var-file=tests/moto.tfvars
       - if: failure()
         run: docker logs moto 2>&1 | tail -100
+
+  # Starts the whole local lakehouse and loads two consecutive days of real
+  # padron snapshots (a sample cut by tests/e2e/build_sample.py: 3,155 legal
+  # entities, with the 155 that changed and the 39 that appeared on day 2).
+  # Then it builds gold and checks the result from Trino.
+  stack:
+    runs-on: ubuntu-latest
+    env:
+      DAY1: "2026-10-25"
+      DAY2: "2026-10-26"
+      SNAPSHOTS_HOST_DIR: ./tests/e2e/snapshots
+    steps:
+      - uses: actions/checkout@v7
+      - run: cp .env.example .env
+      - run: docker compose up -d --build --wait
+      - run: docker compose run --rm jobs python -m ruc_lakehouse.jobs.smoke
+      - name: Load both days
+        run: |
+          for day in "$DAY1" "$DAY2"; do
+            docker compose run --rm jobs python -m ruc_lakehouse.ingest.landing "$day"
+            docker compose run --rm jobs python -m ruc_lakehouse.jobs.bronze "$day"
+            docker compose run --rm jobs python -m ruc_lakehouse.jobs.silver "$day"
+          done
+      - run: docker compose run --rm jobs dbt build
+      - name: Check bronze, silver and gold from Trino
+        run: |
+          query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
+          check() { echo "$1: got $2, expected $3"; test "$2" = "$3"; }
+          check "bronze day 1" "$(query "select count(*) from lakehouse.bronze.padron_ruc where snapshot_date = date '$DAY1'")" 3155
+          check "bronze day 2" "$(query "select count(*) from lakehouse.bronze.padron_ruc where snapshot_date = date '$DAY2'")" 3194
+          check "rejects" "$(query "select count(*) from lakehouse.bronze.padron_ruc_rejects")" 2
+          check "history rows" "$(query "select count(*) from lakehouse.silver.taxpayers_history")" 3349
+          check "current rows" "$(query "select count_if(is_current) from lakehouse.silver.taxpayers_history")" 3194
+          check "changed" "$(query "select count_if(end_reason = 'changed') from lakehouse.silver.taxpayers_history")" 155
+          events() { query "select count(*) from lakehouse.gold.fct_taxpayer_events where snapshot_date = date '$DAY2' and event_type = '$1'"; }
+          check "registered events" "$(events registered)" 39
+          check "status changes" "$(events status_changed)" 62
+          check "address condition changes" "$(events address_condition_changed)" 83
+          check "registry on day 2" "$(query "select sum(taxpayers) from lakehouse.gold.agg_registry_daily where snapshot_date = date '$DAY2'")" 3194
+      # Day 2's merge left a delete file in silver: compaction must fold it in
+      # without changing a row. Bronze keeps only day 2 with --bronze-days 0.
+      - name: Maintenance
+        run: |
+          query() { docker compose exec -T trino trino --output-format CSV_UNQUOTED --execute "$1" | tail -1; }
+          check() { echo "$1: got $2, expected $3"; test "$2" = "$3"; }
+          delete_files() { query "select count(*) from lakehouse.silver.\"taxpayers_history\$files\" where content <> 0"; }
+          check "silver delete files before" "$(delete_files)" 1
+          docker compose run --rm jobs python -m ruc_lakehouse.jobs.maintenance --bronze-days 0
+          check "silver delete files after" "$(delete_files)" 0
+          check "history rows" "$(query "select count(*) from lakehouse.silver.taxpayers_history")" 3349
+          check "current rows" "$(query "select count_if(is_current) from lakehouse.silver.taxpayers_history")" 3194
+          check "bronze days" "$(query "select count(distinct snapshot_date) from lakehouse.bronze.padron_ruc")" 1
+          check "maintenance run" "$(query "select status from lakehouse.ops.job_runs where job = 'maintenance'")" succeeded
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
