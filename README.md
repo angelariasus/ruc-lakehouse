@@ -145,6 +145,25 @@ took two minutes, and silver applied the 505 new versions in 46 seconds. The
 277 changes are 145 status, 126 address condition, 99 address, 54 location and
 2 name changes (one taxpayer can change several columns at once).
 
+The sensor then picked up the next four days on its own. The history now spans
+six consecutive snapshots (2026-10-25 to 2026-10-30) and ends with 18,512,116
+versions, 18,498,129 of them current, exactly one per RUC:
+
+| Snapshot | New | Changed | Removed | Silver run |
+|---|---|---|---|---|
+| 2026-10-26 | 228 | 277 | 0 | 45 s |
+| 2026-10-27 | 1,658 | 1,795 | 7 | 91 s |
+| 2026-10-28 | 3,186 | 3,891 | 0 | 59 s |
+| 2026-10-29 | 2,460 | 3,065 | 2 | 63 s |
+| 2026-10-30 | 4,165 | 4,950 | 0 | 65 s |
+
+The first removals are real: the 9 RUCs that left the registry (7 on the 27th,
+2 on the 29th) were all natural persons whose status was
+`NUM. INTERNO IDENTIF`, and their last version closed with
+`end_reason = 'removed'`. The most frequent status change every day is
+`INHABILITADO-VENT.UN` back to `ACTIVO` (204 on the 27th, 646 on the 30th),
+followed by `ACTIVO` to `BAJA DEFINITIVA`.
+
 ## Gold models
 
 dbt builds the reporting layer on Trino (`gold` schema), with
@@ -327,14 +346,18 @@ unit tests use a few invented lines for the cases a real file almost never has
 
 ## Limitations
 
-- **No real deregistration is covered end to end.** None was removed between the
-  two sample days, so that path is tested only by the silver unit tests.
+- **The CI sample has no removal.** Real removals did show up on the 27th and
+  the 29th and closed correctly in the lake, but the sample used by the `stack`
+  job covers only 2026-10-25 and 2026-10-26, so in CI that path is tested only
+  by the silver unit tests.
 - **The AWS side is not deployed.** It is validated against Moto, which is not
   AWS. Open points: where Dagster runs on AWS, the daily download on AWS, and a
   dbt-athena target. See [`infra/README.md`](infra/README.md).
 - **The collector is a scheduled task on a laptop.** A day with the machine off
   is a snapshot SUNAT does not hand out again.
-- **Little history yet.** The daily churn figures come from one pair of days.
+- **Little history yet.** The daily churn figures come from six days and
+  range from 228 to 4,165 new taxpayers a day, so they say little about a
+  normal month.
 
 ## Data source
 
